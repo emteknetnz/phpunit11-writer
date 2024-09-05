@@ -19,7 +19,7 @@ $vendors = [
     'colymba',
     'dnadesign',
     'tractorcow',
-    'cwp',
+    // 'cwp',
 ];
 
 function getClasses(array $ast): array
@@ -44,11 +44,29 @@ function getMethods(Class_ $class): array
     return array_filter($class->stmts, fn($v) => $v instanceof ClassMethod);
 }
 
+// Update phpunit/phpunit version
+foreach ($vendors as $vendor) {
+    $vendorDir = __DIR__ . "/../../$vendor";
+    $filenames = glob("$vendorDir/*/composer.json");
+    foreach ($filenames as $filename) {
+        $contents = file_get_contents($filename);
+        if (strpos($contents, 'phpunit/phpunit') === false) {
+            continue;
+        }
+        $newContents = preg_replace('#"phpunit/phpunit": "[^"]+"#', '"phpunit/phpunit": "^11.3"', $contents);
+        if ($newContents !== $contents) {
+            echo "Updated $filename\n";
+            file_put_contents($filename, $newContents);
+        }
+    }
+}
+
+// Update dataProvider methods to be static
 foreach ($vendors as $vendor) {
     $vendorDir = __DIR__ . "/../../$vendor";
     $filenames = shell_exec("cd $vendorDir && find . | grep Test.php");
 
-    foreach (explode("\n", $filenames) as $filename) {
+    foreach (explode("\n", $filenames ?? '') as $filename) {
         if (!$filename) {
             continue;
         }
@@ -72,6 +90,9 @@ foreach ($vendors as $vendor) {
         }
         $classes = getClasses($ast);
         /** @var Class_ $class */
+        if (empty($classes)) {
+            continue;
+        }
         $class = $classes[0];
         $methods = getMethods($class);
         /** @var ClassMethod $method */
