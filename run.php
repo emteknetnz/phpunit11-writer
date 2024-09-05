@@ -2,18 +2,13 @@
 
 # dcm 'php vendor/emteknetnz/phpunit11-writer/run.php'
 
-use PhpParser\ParserFactory;
-use PhpParser\{Node, NodeTraverser, NodeVisitorAbstract};
-use PhpParser\Comment;
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\If_;
-use PhpParser\Comment\Doc;
 use PhpParser\Lexer;
 use PhpParser\PhpVersion;
 use PhpParser\Parser\Php8;
 use PhpParser\Node\Stmt\ClassMethod;
-use PhpParser\Modifiers;
 
 require __DIR__ . '/../../autoload.php';
 
@@ -59,14 +54,11 @@ foreach ($vendors as $vendor) {
         }
         $path = "$vendorDir/$filename";
         $code = file_get_contents($path);
-
         $lexer = new Lexer([
             'usedAttributes' => [
                 'comments',
                 'startLine',
                 'endLine',
-                //'startTokenPos',
-                //'endTokenPos',
                 'startFilePos',
                 'endFilePos'
             ]
@@ -78,7 +70,6 @@ foreach ($vendors as $vendor) {
         } catch (Error $error) {
             throw new Exception("Parse error: {$error->getMessage()}");
         }
-
         $classes = getClasses($ast);
         /** @var Class_ $class */
         $class = $classes[0];
@@ -111,30 +102,10 @@ foreach ($vendors as $vendor) {
                 ]);
                 $madeChanges = true;
             }
-            if ($madeChanges) {
-                echo "Writing $path\n";
-                file_put_contents($path, $code);
-            }
         }
-
-        // $traverser = new NodeTraverser;
-        // $traverser->addVisitor(new class extends NodeVisitorAbstract {
-
-        //     public function enterNode(Node $node) {
-        //         if ($node instanceof Comment) {
-        //             var_dump($node);die;
-        //         }
-        //     }
-
-        //     // public function leaveNode(Node $node) {
-        //     //     if ($node instanceof Node\Scalar\Int_) {
-        //     //         return new Node\Scalar\String_((string) $node->value);
-        //     //     }
-        //     // }
-        // });
-        
-        // $modifiedStmts = $traverser->traverse($ast);
-
-        die;
+        if ($madeChanges) {
+            echo "Updated $path\n";
+            file_put_contents($path, $code);
+        }
     }
 }
