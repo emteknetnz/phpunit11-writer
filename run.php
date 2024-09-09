@@ -9,6 +9,7 @@ use PhpParser\Lexer;
 use PhpParser\PhpVersion;
 use PhpParser\Parser\Php8;
 use PhpParser\Node\Stmt\ClassMethod;
+use PhpParser\Node\Stmt\Use_;
 
 require __DIR__ . '/../../autoload.php';
 
@@ -39,9 +40,16 @@ function getClasses(array $ast): array
     return $ret;
 }
 
+function getUses(array $ast): array
+{
+    return array_filter($ast[0]->stmts, fn($v) => $v instanceof Use_);
+}
+
 function getMethods(Class_ $class): array
 {
-    return array_filter($class->stmts, fn($v) => $v instanceof ClassMethod);
+    $methods = array_filter($class->stmts, fn($v) => $v instanceof ClassMethod);
+    // return in reverse order so updates don't affect line numbers
+    return array_reverse($methods);
 }
 
 // Update phpunit/phpunit version
@@ -61,72 +69,122 @@ foreach ($vendors as $vendor) {
     }
 }
 
-// Update dataProvider methods to be static
-foreach ($vendors as $vendor) {
-    $vendorDir = __DIR__ . "/../../$vendor";
-    $filenames = shell_exec("cd $vendorDir && find . | grep Test.php");
+function updateTestClassMethods($callback)
+{
+    global $vendors;
+    foreach ($vendors as $vendor) {
+        $vendorDir = __DIR__ . "/../../$vendor";
+        $filenames = shell_exec("cd $vendorDir && find . | grep Test.php");
 
-    foreach (explode("\n", $filenames ?? '') as $filename) {
-        if (!$filename) {
-            continue;
-        }
-        $path = "$vendorDir/$filename";
-        $code = file_get_contents($path);
-        $lexer = new Lexer([
-            'usedAttributes' => [
-                'comments',
-                'startLine',
-                'endLine',
-                'startFilePos',
-                'endFilePos'
-            ]
-        ]);
-        $version = PhpVersion::getNewestSupported();
-        $parser = new Php8($lexer, $version);
-        try {
-            $ast = $parser->parse($code);
-        } catch (Error $error) {
-            throw new Exception("Parse error: {$error->getMessage()}");
-        }
-        $classes = getClasses($ast);
-        /** @var Class_ $class */
-        if (empty($classes)) {
-            continue;
-        }
-        $class = $classes[0];
-        $methods = getMethods($class);
-        /** @var ClassMethod $method */
-        $dataProviders = [];
-        foreach ($methods as $method) {
-            $docblock = $method->getDocComment() ?? '';
-            if (preg_match('#\* @dataProvider ([a-zA-Z0-9_]+)#', $docblock, $matches)) {
-                $dataProvider = $matches[1];
-                $dataProviders[] = $dataProvider;
+        foreach (explode("\n", $filenames ?? '') as $filename) {
+            if (!$filename) {
+                continue;
             }
-        }
-        /** @var ClassMethod $method */
-        $madeChanges = false;
-        foreach ($methods as $method) {
-            $name = $method->name->name;
-            if (in_array($name, $dataProviders)) {
-                if ($method->isStatic()) {
-                    continue;
-                }
-                $start = $method->getStartFilePos();
-                $end = $method->getEndFilePos();
-                $methodStr = substr($code, $start, $end - $start + 1);
-                $methodStr = str_replace("function $name", "static function $name", $methodStr);
-                $code = implode('', [
-                    substr($code, 0, $start),
-                    $methodStr,
-                    substr($code, $end + 1),
-                ]);
-                $madeChanges = true;
+            $path = "$vendorDir/$filename";
+            $code = file_get_contents($path);
+            $lexer = new Lexer([
+                'usedAttributes' => [
+                    'comments',
+                    'startLine',
+                    'endLine',
+                    'startFilePos',
+                    'endFilePos'
+                ]
+            ]);
+            $version = PhpVersion::getNewestSupported();
+            $parser = new Php8($lexer, $version);
+            try {
+                $ast = $parser->parse($code);
+            } catch (Error $error) {
+                throw new Exception("Parse error: {$error->getMessage()}");
             }
-        }
-        if ($madeChanges) {
-            echo "Updated $path\n";
-            file_put_contents($path, $code);
+            $classes = getClasses($ast);
+            /** @var Class_ $class */
+            if (empty($classes)) {
+                continue;
+            }
+            $class = $classes[0];
+            $methods = getMethods($class);
+            $newCode = $callback($ast, $path, $methods, $code);
+            if ($newCode !== $code) {
+                echo "Updated $path\n";
+                file_put_contents($path, $newCode);
+            }
         }
     }
 }
+
+// Update dataProvider methods to be static
+updateTestClassMethods(function($ast, $path, $methods, $code) {
+    /** @var ClassMethod $method */
+    $dataProviders = [];
+    foreach ($methods as $method) {
+        $docComment = $method->getDocComment() ?? '';
+        if (preg_match('#\* @dataProvider ([a-zA-Z0-9_]+)#', (string) $docComment, $matches)) {
+            $dataProvider = $matches[1];
+            $dataProviders[] = $dataProvider;
+        }
+    }
+    /** @var ClassMethod $method */
+    foreach ($methods as $method) {
+        $name = $method->name->name;
+        if (in_array($name, $dataProviders)) {
+            if ($method->isStatic()) {
+                continue;
+            }
+            $start = $method->getStartFilePos();
+            $end = $method->getEndFilePos();
+            $methodStr = substr($code, $start, $end - $start + 1);
+            $methodStr = str_replace("function $name", "static function $name", $methodStr);
+            $code = implode('', [
+                substr($code, 0, $start),
+                $methodStr,
+                substr($code, $end + 1),
+            ]);
+        }
+    }
+    return $code;
+});
+
+// Convert phpunit annotations to phpunit attributes
+updateTestClassMethods(function($ast, $path, $methods, $code) {
+    /** @var ClassMethod $method */
+    foreach ($methods as $method) {
+        $docComment = $method->getDocComment() ?? '';
+        $doc = (string) $docComment;
+        $dataProvider = '';
+        $rx = "#\s+\* @dataProvider ([a-zA-Z0-9_]+)\n#";
+        if (preg_match($rx, $doc, $matches)) {
+            $dataProvider = $matches[1];
+            $start = $docComment->getStartFilePos();
+            $end = $docComment->getEndFilePos();
+            $newDoc = preg_replace($rx, '', $doc);
+            if ($newDoc == '/**     */') {
+                $newDoc = '';
+                // minus 5 to remove the leading spaces and newline
+                $start -= 5;
+            }
+            $newDoc .= "\n    #[DataProvider('$dataProvider')]";
+            $code = implode('', [
+                substr($code, 0, $start),
+                $newDoc,
+                substr($code, $end + 1),
+            ]);
+            $uses = getUses($ast);
+            $lastUse = end($uses);
+            if (!$lastUse) {
+                throw new Exception("No use statements found in $path");
+            }
+            $start = $lastUse->getStartFilePos();
+            $end = $lastUse->getEndFilePos();
+            $code = implode('', [
+                substr($code, 0, $end + 1), // note: keeping the existing use statements
+                "\nuse PHPUnit\Framework\Attributes\DataProvider;",
+                substr($code, $end + 1),
+            ]);
+            file_put_contents('/var/www/test.txt', $code);
+            echo "Updated $dataProvider\n";
+        }
+    }
+    return $code;
+});
