@@ -76,11 +76,6 @@ function updateTestClassMethods($callback)
             if (!$filename) {
                 continue;
             }
-
-            if (!str_contains($filename, '/admin/')) {
-                continue;
-            }
-
             $path = "$vendorDir/$filename";
             $code = file_get_contents($path);
             $lexer = new Lexer([
@@ -165,50 +160,94 @@ updateTestClassMethods(function($ast, $path, $methods, $code) {
 });
 
 // Convert phpunit annotations to phpunit attributes
+$matrix = [
+    [
+        'dataProvider ([a-zA-Z0-9_]+)',
+        'DataProvider(\'__matches_1__\')',
+        'PHPUnit\Framework\Attributes\DataProvider',
+    ],
+    [
+        'doesNotPerformAssertions',
+        'DoesNotPerformAssertions',
+        'PHPUnit\Framework\Attributes\DoesNotPerformAssertions',
+    ],
+];
+foreach ($matrix as $data) {
+    updateTestClassMethods(function($ast, $path, $methods, $code) use ($data) {
+        [$annotation, $attribute, $import] = $data;
+        /** @var ClassMethod $method */
+        $addImport = false;
+        foreach ($methods as $method) {
+            $docComment = $method->getDocComment() ?? '';
+            $doc = (string) $docComment;
+            $rx = "#[ \t]+\* @$annotation\n#";
+            if (preg_match($rx, $doc, $matches)) {
+                $start = $docComment->getStartFilePos();
+                $end = $docComment->getEndFilePos();
+                $newDoc = preg_replace($rx, '', $doc);
+                if ($newDoc == '/**     */') {
+                    $newDoc = '';
+                    // minus 5 to remove the leading spaces and newline
+                    $start -= 5;
+                }
+                $newDoc .= "\n    #[$attribute]";
+                if (isset($matches[1])) {
+                    $newDoc = str_replace('__matches_1__', $matches[1], $newDoc);
+                }
+                $code = implode('', [
+                    substr($code, 0, $start),
+                    $newDoc,
+                    substr($code, $end + 1),
+                ]);
+                $addImport = true;
+            }
+        }
+        if ($addImport) {
+            $uses = getUses($ast);
+            $lastUse = end($uses);
+            if (!$lastUse) {
+                throw new Exception("No use statements found in $path");
+            }
+            $start = $lastUse->getStartFilePos();
+            $end = $lastUse->getEndFilePos();
+            $code = implode('', [
+                substr($code, 0, $end + 1), // note: keeping the existing use statements
+                "\nuse $import;",
+                substr($code, $end + 1),
+            ]);
+        }
+        return $code;
+    });
+}
+
+// Remove code coverage annotations
 updateTestClassMethods(function($ast, $path, $methods, $code) {
     /** @var ClassMethod $method */
-    $addImport = false;
     foreach ($methods as $method) {
         $docComment = $method->getDocComment() ?? '';
         $doc = (string) $docComment;
-        $dataProvider = '';
-        $rx = "#\s+\* @dataProvider ([a-zA-Z0-9_]+)\n#";
-        if (preg_match($rx, $doc, $matches)) {
-            $dataProvider = $matches[1];
+        $rxs = [
+            "#[ \t]+\* @covers .+\n#",
+            "#[ \t]+\* @uses .+\n#",
+        ];
+        foreach ($rxs as $rx) {
+            if (!preg_match($rx, $doc)) {
+                continue;
+            }
             $start = $docComment->getStartFilePos();
             $end = $docComment->getEndFilePos();
             $newDoc = preg_replace($rx, '', $doc);
-            if ($newDoc == '/**     */') {
+            if ($newDoc == '/**     */' || $newDoc == "/**\n     */") {
                 $newDoc = '';
                 // minus 5 to remove the leading spaces and newline
                 $start -= 5;
             }
-            $newDoc .= "\n    #[DataProvider('$dataProvider')]";
             $code = implode('', [
                 substr($code, 0, $start),
                 $newDoc,
                 substr($code, $end + 1),
             ]);
-            $addImport = true;
-            // remove
-            echo "Updated $dataProvider\n";
         }
-    }
-    if ($addImport) {
-        $uses = getUses($ast);
-        $lastUse = end($uses);
-        if (!$lastUse) {
-            throw new Exception("No use statements found in $path");
-        }
-        $start = $lastUse->getStartFilePos();
-        $end = $lastUse->getEndFilePos();
-        $code = implode('', [
-            substr($code, 0, $end + 1), // note: keeping the existing use statements
-            "\nuse PHPUnit\Framework\Attributes\DataProvider;",
-            substr($code, $end + 1),
-        ]);
-        // remove
-        file_put_contents('/var/www/test.txt', $code);
     }
     return $code;
 });
@@ -217,10 +256,6 @@ updateTestClassMethods(function($ast, $path, $methods, $code) {
 updateTestClassMethods(function($ast, $path, $methods, $code) {
     /** @var ClassMethod $method */
     foreach ($methods as $method) {
-        $name = $method->name->name;
-
-        if ($name != 'testCMSVersionNumber') continue;
-
         $start = $method->getStartFilePos();
         $end = $method->getEndFilePos();
         $methodStr = substr($code, $start, $end - $start + 1);
@@ -231,5 +266,11 @@ updateTestClassMethods(function($ast, $path, $methods, $code) {
             substr($code, $end + 1),
         ]);
     }
+    return $code;
+});
+
+// Remove any leftover empty docblocks
+updateTestClassMethods(function($ast, $path, $methods, $code) {
+    $code = str_replace("    /**\n     */\n", '', $code);
     return $code;
 });
