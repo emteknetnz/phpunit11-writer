@@ -220,15 +220,19 @@ foreach ($matrix as $data) {
     });
 }
 
-// Remove code coverage annotations
+// Remove annotations
 updateTestClassMethods(function($ast, $path, $methods, $code) {
     /** @var ClassMethod $method */
     foreach ($methods as $method) {
         $docComment = $method->getDocComment() ?? '';
         $doc = (string) $docComment;
         $rxs = [
+            // code-covered annotations
             "#[ \t]+\* @covers .+\n#",
             "#[ \t]+\* @uses .+\n#",
+            // other annotations
+            "#[ \t]+\* @group .+\n#",
+            "#[ \t]+\* @depends .+\n#",
         ];
         foreach ($rxs as $rx) {
             if (!preg_match($rx, $doc)) {
@@ -269,8 +273,14 @@ updateTestClassMethods(function($ast, $path, $methods, $code) {
     return $code;
 });
 
+// Remove empty last lines from dockblocks
+updateTestClassMethods(function($ast, $path, $methods, $code) {
+    $code = str_replace("\n     *\n     */\n", "\n     */\n", $code);
+    return $code;
+});
+
 // Remove any leftover empty docblocks
 updateTestClassMethods(function($ast, $path, $methods, $code) {
-    $code = str_replace("    /**\n     */\n", '', $code);
+    $code = str_replace("\n    /**\n     */\n", "\n", $code);
     return $code;
 });
