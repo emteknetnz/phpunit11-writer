@@ -2,6 +2,10 @@
 
 # dcm 'php vendor/emteknetnz/phpunit11-writer/run.php'
 
+# ! Note: it's possible to have 2+ @dataProvider's in a single method which this script
+# didn't account for. You can detect multiple @dataProviders on a fresh project using
+# the following regex search @dataProvider.+\n\s+\* @dataProvider
+
 use PhpParser\Node\Stmt\Namespace_;
 use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\If_;
